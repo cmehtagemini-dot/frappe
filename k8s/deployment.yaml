@@ -1,31 +1,252 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: frappe-app
+  name: frappe-config
+  namespace: default
+data:
+  DB_HOST: "mariadb"
+  DB_PORT: "3306"
+  REDIS_CACHE: "redis-cache:6379"
+  REDIS_QUEUE: "redis-queue:6379"
+  FRAPPE_SITE_NAME: "frontend"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: default
 spec:
-  replicas: 2
+  selector:
+    app: mariadb
+  ports:
+    - port: 3306
+      targetPort: 3306
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mariadb
+  namespace: default
+spec:
+  serviceName: mariadb
+  replicas: 1
   selector:
     matchLabels:
-      app: frappe
+      app: mariadb
   template:
     metadata:
       labels:
-        app: frappe
+        app: mariadb
+    spec:
+      containers:
+      - name: mariadb
+        image: mariadb:11.8
+        ports:
+        - containerPort: 3306
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "admin"
+        volumeMounts:
+        - name: db-data
+          mountPath: /var/lib/mysql
+        livenessProbe:
+          exec:
+            command: ["mysqladmin", "ping", "-h", "localhost", "-padmin"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+  volumeClaimTemplates:
+  - metadata:
+      name: db-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cache
+  namespace: default
+spec:
+  selector:
+    app: redis-cache
+  ports:
+    - port: 6379
+      targetPort: 6379
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-cache
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-cache
+  template:
+    metadata:
+      labels:
+        app: redis-cache
+    spec:
+      containers:
+      - name: redis
+        image: redis:6.2-alpine
+        ports:
+        - containerPort: 6379
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-queue
+  namespace: default
+spec:
+  selector:
+    app: redis-queue
+  ports:
+    - port: 6379
+      targetPort: 6379
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-queue
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-queue
+  template:
+    metadata:
+      labels:
+        app: redis-queue
+    spec:
+      containers:
+      - name: redis
+        image: redis:6.2-alpine
+        ports:
+        - containerPort: 6379
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: frappe-configurator
+  namespace: default
+spec:
+  template:
+    spec:
+      serviceAccountName: default
+      restartPolicy: Never
+      containers:
+      - name: configurator
+        image: devopsaiagent.azurecr.io/frappe:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            bench set-config -g db_host mariadb
+            bench set-config -g db_port 3306
+            bench set-config -g redis_cache "redis://redis-cache:6379"
+            bench set-config -g redis_queue "redis://redis-queue:6379"
+        envFrom:
+        - configMapRef:
+            name: frappe-config
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+      volumes:
+      - name: sites
+        emptyDir: {}
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: frappe-site-creator
+  namespace: default
+spec:
+  template:
+    spec:
+      serviceAccountName: default
+      restartPolicy: Never
+      containers:
+      - name: site-creator
+        image: devopsaiagent.azurecr.io/frappe:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            sleep 30
+            bench new-site --mariadb-user-host-login-scope=% --admin-password=admin --db-root-password=admin frontend
+        env:
+        - name: DB_HOST
+          value: "mariadb"
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+      volumes:
+      - name: sites
+        emptyDir: {}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frappe-backend
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frappe-backend
+  template:
+    metadata:
+      labels:
+        app: frappe-backend
     spec:
       containers:
       - name: frappe
         image: devopsaiagent.azurecr.io/frappe:latest
+        command: ["bench", "serve", "--host", "0.0.0.0", "--port", "8000"]
         ports:
         - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: frappe-config
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+      volumes:
+      - name: sites
+        emptyDir: {}
+
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: frappe-service
+  namespace: default
 spec:
   type: LoadBalancer
-  ports:
-  - port: 80
-    targetPort: 8000
   selector:
-    app: frappe
+    app: frappe-backend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
