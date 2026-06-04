@@ -1,10 +1,5 @@
 trigger:
-  branches:
-    include:
-      - develop
-
-pool:
-  vmImage: 'ubuntu-latest'
+  - develop
 
 variables:
   dockerRegistry: 'devopsaiagent.azurecr.io'
@@ -13,33 +8,36 @@ variables:
 
 stages:
   - stage: BuildAndPush
-    displayName: 'Build and Push Docker Image to ACR'
     jobs:
-      - job: BuildImage
+      - job: BuildAndPush
+        pool:
+          vmImage: 'ubuntu-latest'
         steps:
           - task: Docker@2
+            displayName: 'Push Frappe image to ACR'
             inputs:
-              command: 'buildAndPush'
-              repository: $(imageName)
-              dockerfile: 'Dockerfile'
-              containerRegistry: 'ACR-ServiceConnection'
+              command: 'build'
+              Dockerfile: 'Dockerfile'
+              repository: '$(imageName)'
+              dockerfile: $(Build.SourcesDirectory)/Dockerfile
               tags: |
                 $(imageTag)
                 latest
+              arguments: '--build-arg BUILDKIT_INLINE_CACHE=1'
 
   - stage: DeployToAKS
-    displayName: 'Deploy to AKS'
-    dependsOn: BuildAndPush
-    condition: succeeded()
     jobs:
-      - job: Deploy
+      - job: DeployToAKS
+        pool:
+          vmImage: 'ubuntu-latest'
         steps:
+          - checkout: self
+          
           - task: KubernetesManifest@0
+            displayName: 'Deploy to AKS'
             inputs:
               action: 'deploy'
               kubernetesServiceConnection: 'AKS-ServiceConnection'
               namespace: 'default'
               manifests: |
-                k8s/deployment.yaml
-              containers: |
-                $(dockerRegistry)/$(imageName):$(imageTag)
+                $(Build.SourcesDirectory)/k8s/deployment.yaml
