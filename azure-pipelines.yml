@@ -7,83 +7,39 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  buildId: $(Build.BuildId)
-  sourceDirectory: $(Build.SourcesDirectory)
+  dockerRegistry: 'devopsaiagent.azurecr.io'
+  imageName: 'frappe'
+  imageTag: '$(Build.BuildId)'
 
 stages:
-  - stage: Preflight
-    displayName: 'Preflight & Source'
+  - stage: BuildAndPush
+    displayName: 'Build and Push Docker Image to ACR'
     jobs:
-      - job: ValidateSource
-        displayName: 'Validate Source Code'
+      - job: BuildImage
         steps:
-          - checkout: self
-          - script: |
-              echo "Repository: $(Build.Repository.Name)"
-              echo "Branch: $(Build.SourceBranch)"
-              echo "Commit: $(Build.SourceVersion)"
-              echo "Build ID: $(Build.BuildId)"
-            displayName: 'Display Build Info'
+          - task: Docker@2
+            inputs:
+              command: 'buildAndPush'
+              repository: $(imageName)
+              dockerfile: 'Dockerfile'
+              containerRegistry: 'ACR-ServiceConnection'
+              tags: |
+                $(imageTag)
+                latest
 
-  - stage: Build
-    displayName: 'Build'
-    dependsOn: Preflight
+  - stage: DeployToAKS
+    displayName: 'Deploy to AKS'
+    dependsOn: BuildAndPush
+    condition: succeeded()
     jobs:
-      - job: BuildApplication
-        displayName: 'Build Application'
+      - job: Deploy
         steps:
-          - script: |
-              echo "Starting build process..."
-              echo "Build Number: $(Build.BuildId)"
-              echo "Build completed successfully"
-            displayName: 'Build Step'
-
-  - stage: Test
-    displayName: 'Test'
-    dependsOn: Build
-    jobs:
-      - job: RunTests
-        displayName: 'Run Unit Tests'
-        steps:
-          - script: |
-              echo "Running tests..."
-              echo "Test framework: Frappe Bench"
-              echo "All tests passed"
-            displayName: 'Unit Tests'
-      
-      - job: ValidateDocker
-        displayName: 'Validate Docker Config'
-        steps:
-          - script: |
-              echo "Validating Docker configuration..."
-              docker --version
-              echo "Docker validation passed"
-            displayName: 'Docker Validation'
-
-  - stage: Deploy
-    displayName: 'Deploy'
-    dependsOn: Test
-    jobs:
-      - job: DeployToEnvironment
-        displayName: 'Deploy to Target'
-        steps:
-          - script: |
-              echo "Preparing deployment..."
-              echo "Target: Azure Kubernetes Service (AKS)"
-              echo "Namespace: default"
-              echo "Image: cmehtagemini.azurecr.io/erpnext:$(Build.BuildId)"
-              echo "Deployment prepared successfully"
-            displayName: 'Deploy Step'
-
-  - stage: Monitoring
-    displayName: 'Monitoring'
-    dependsOn: Deploy
-    jobs:
-      - job: HealthCheck
-        displayName: 'Health Check'
-        steps:
-          - script: |
-              echo "Running health checks..."
-              echo "Application health: OK"
-              echo "All services running"
-            displayName: 'Health Check'
+          - task: KubernetesManifest@0
+            inputs:
+              action: 'deploy'
+              kubernetesServiceConnection: 'AKS-ServiceConnection'
+              namespace: 'default'
+              manifests: |
+                k8s/deployment.yaml
+              containers: |
+                $(dockerRegistry)/$(imageName):$(imageTag)
