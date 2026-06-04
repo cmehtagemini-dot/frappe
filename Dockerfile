@@ -4,7 +4,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN pip install --no-cache-dir -r requirements.txt
+# Install frappe dependencies if requirements.txt exists, otherwise install frappe
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; else pip install --no-cache-dir frappe; fi
 
 EXPOSE 8000
 
