@@ -7,13 +7,13 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  dockerRegistry: 'cmehtagemini.azurecr.io'
+  dockerRegistry: 'devopsaiagent.azurecr.io'
   imageName: 'frappe'
   imageTag: '$(Build.BuildId)'
 
 stages:
   - stage: BuildAndPush
-    displayName: 'Build Docker Image'
+    displayName: 'Build and Push Docker Image to ACR'
     jobs:
       - job: BuildImage
         steps:
@@ -30,6 +30,7 @@ stages:
   - stage: DeployToAKS
     displayName: 'Deploy to AKS'
     dependsOn: BuildAndPush
+    condition: succeeded()
     jobs:
       - job: Deploy
         steps:
