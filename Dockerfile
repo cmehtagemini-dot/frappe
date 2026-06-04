@@ -1,5 +1,7 @@
-FROM python:3.11-slim
+FROM frappe/erpnext:latest
 
+# Your custom code can go here if needed
+# For now, just use the official image as-is
 WORKDIR /app
 
 # Install system dependencies
