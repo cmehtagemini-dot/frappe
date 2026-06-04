@@ -7,60 +7,38 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  dockerRegistryServiceConnection: 'ACR-Connection'
-  imageRepository: 'erpnext'
-  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
-  tag: '$(Build.BuildId)'
-  azureSubscriptionEndpoint: 'Azure-Subscription'
-  kubernetesCluster: 'frappe-aks'
-  kubernetesNamespace: 'default'
+  dockerRegistry: 'cmehtagemini.azurecr.io'
+  imageName: 'frappe'
+  imageTag: '$(Build.BuildId)'
 
 stages:
-  - stage: Build
-    displayName: Build Stage
+  - stage: BuildAndPush
+    displayName: 'Build Docker Image'
     jobs:
       - job: BuildImage
-        displayName: Build Docker Image
         steps:
           - task: Docker@2
-            displayName: Build and push image to ACR
             inputs:
-              command: buildAndPush
-              repository: $(imageRepository)
-              dockerfile: $(dockerfilePath)
-              containerRegistry: $(dockerRegistryServiceConnection)
+              command: 'buildAndPush'
+              repository: $(imageName)
+              dockerfile: 'Dockerfile'
+              containerRegistry: 'ACR-ServiceConnection'
               tags: |
-                $(tag)
+                $(imageTag)
                 latest
 
-  - stage: Test
-    displayName: Test Stage
-    dependsOn: Build
+  - stage: DeployToAKS
+    displayName: 'Deploy to AKS'
+    dependsOn: BuildAndPush
     jobs:
-      - job: RunTests
-        displayName: Run Tests
-        steps:
-          - checkout: self
-          - script: |
-              echo "Running tests..."
-              docker --version
-              docker compose --version
-            displayName: 'Validate Docker'
-
-  - stage: Deploy
-    displayName: Deploy Stage
-    dependsOn: Test
-    jobs:
-      - job: DeployToAKS
-        displayName: Deploy to AKS
+      - job: Deploy
         steps:
           - task: KubernetesManifest@0
-            displayName: Deploy to Kubernetes
             inputs:
               action: 'deploy'
-              kubernetesServiceConnection: 'AKS-Connection'
-              namespace: $(kubernetesNamespace)
+              kubernetesServiceConnection: 'AKS-ServiceConnection'
+              namespace: 'default'
               manifests: |
-                $(Build.ArtifactStagingDirectory)/k8s/*.yaml
+                k8s/deployment.yaml
               containers: |
-                cmehtagemini.azurecr.io/$(imageRepository):$(tag)
+                $(dockerRegistry)/$(imageName):$(imageTag)
