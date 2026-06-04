@@ -1,0 +1,55 @@
+trigger:
+  branches:
+    include:
+      - develop
+
+resources:
+  repositories:
+  - repository: frappe-repo
+    type: github
+    name: frappe/frappe
+    endpoint: GitHub-Connection
+    ref: develop
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  DOCKER_REGISTRY: cmehtagemini.azurecr.io
+  IMAGE_NAME: erpnext
+
+stages:
+  - stage: Build
+    jobs:
+      - job: BuildImage
+        steps:
+          - checkout: frappe-repo
+          
+          - task: Docker@2
+            inputs:
+              containerRegistry: 'ACR-Connection'
+              repository: $(IMAGE_NAME)
+              command: buildAndPush
+              dockerfile: '**/Dockerfile'
+              tags: $(Build.BuildId)
+
+  - stage: Test
+    jobs:
+      - job: RunTests
+        steps:
+          - checkout: frappe-repo
+          
+          - script: docker compose -f docker-compose.yml config
+            displayName: Validate Compose
+
+  - stage: Deploy
+    jobs:
+      - job: DeployAKS
+        steps:
+          - checkout: frappe-repo
+          
+          - task: KubernetesManifest@0
+            inputs:
+              action: deploy
+              manifests: 'k8s/*.yaml'
+              containers: $(DOCKER_REGISTRY)/$(IMAGE_NAME):$(Build.BuildId)
